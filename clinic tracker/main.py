@@ -134,28 +134,28 @@ class ClinicApp:
 
     def show_screen(self, name):
         self.header.config(text=name.title())
-        frame = self.screens[name]
-        frame.tkraise()
+        Frame = self.screens[name]
+        Frame.tkraise()
         self.refresh_screen(name)
 
     def build_all_screens(self):
         self.screens = {}
         for name in ["dashboard", "doctors", "patients", "visits", "payments", "balances"]:
-            frame = tk.Frame(self.screen_container, bg="#eef2f5")
-            frame.place(relwidth=1, relheight=1)
-            self.screens[name] = frame
-            getattr(self, f"build_{name}_screen")(frame)
+            Frame = tk.Frame(self.screen_container, bg="#eef2f5")
+            Frame.place(relwidth=1, relheight=1)
+            self.screens[name] = Frame
+            getattr(self, f"build_{name}_screen")(Frame)
 
     def build_dashboard_screen(self, parent):
-        cards_frame = tk.Frame(parent, bg="#eef2f5")
-        cards_frame.pack(fill="x", pady=(0, 20))
+        cards_Frame = tk.Frame(parent, bg="#eef2f5")
+        cards_Frame.pack(fill="x", pady=(0, 20))
 
         self.stat_cards = {}
         stats = [("Total Doctors", "#2c5282"), ("Total Patients", "#38a169"),
                  ("Total Revenue", "#d69e2e"), ("Outstanding", "#e53e3e")]
 
         for title, color in stats:
-            card = tk.Frame(cards_frame, bg="white", bd=1, relief="solid",
+            card = tk.Frame(cards_Frame, bg="white", bd=1, relief="solid",
                             highlightbackground="#ddd", highlightthickness=1)
             card.pack(side="left", fill="both", expand=True, padx=5)
             tk.Label(card, text="0", font=("Segoe UI", 28, "bold"),
@@ -164,15 +164,15 @@ class ClinicApp:
                      bg="white", fg="#666").pack(pady=(0, 15))
             self.stat_cards[title] = card.winfo_children()[0]
 
-        recent_frame = tk.Frame(parent, bg="white", bd=1, relief="solid",
+        recent_Frame = tk.Frame(parent, bg="white", bd=1, relief="solid",
                                 highlightbackground="#ddd", highlightthickness=1)
-        recent_frame.pack(fill="both", expand=True)
-        tk.Label(recent_frame, text="Recent Visits", font=("Segoe UI", 14, "bold"),
+        recent_Frame.pack(fill="both", expand=True)
+        tk.Label(recent_Frame, text="Recent Visits", font=("Segoe UI", 14, "bold"),
                  bg="white", fg="#1e3a5f").pack(anchor="w", padx=15, pady=15)
 
         cols = ("Patient", "Date", "Amount", "Paid", "Balance")
         self.recent_tree = ttk.Treeview(
-            recent_frame, columns=cols, show="headings", height=8)
+            recent_Frame, columns=cols, show="headings", height=8)
         for c in cols:
             self.recent_tree.heading(c, text=c)
             self.recent_tree.column(c, width=150)
@@ -210,12 +210,12 @@ class ClinicApp:
         tk.Button(search_row, text="Delete Selected", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
                   bd=0, padx=15, pady=4, cursor="hand2", command=self.delete_doctor).pack(side="right")
 
-        list_frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
-        list_frame.pack(fill="both", expand=True)
+        list_Frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
+        list_Frame.pack(fill="both", expand=True)
 
         cols = ("ID", "Name", "Specialty", "Phone", "Patients")
         self.doctors_tree = ttk.Treeview(
-            list_frame, columns=cols, show="headings", height=12)
+            list_Frame, columns=cols, show="headings", height=12)
         for c in cols:
             self.doctors_tree.heading(c, text=c)
             self.doctors_tree.column(c, width=170)
@@ -245,7 +245,7 @@ class ClinicApp:
         tk.Button(form, text="Add Patient", bg="#38a169", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
                   padx=20, pady=5, cursor="hand2", command=self.add_patient).grid(row=5, column=1, pady=10, sticky="e")
 
-        search_row = tk.frame(parent, bg="#eef2f5")
+        search_row = tk.Frame(parent, bg="#eef2f5")
         search_row.pack(fill="x", pady=(0, 10))
         tk.label(search_row, text="search:", bg="#eef2f5").pack(side="left")
         self.pat_search = tk.entry(search_row, width=30)
@@ -254,12 +254,12 @@ class ClinicApp:
         tk.Button(search_row, text="Delete Selected", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
                   bd=0, padx=15, pady=4, cursor="hand2", command=self.delete_patient).pack(side="right")
 
-        list_frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
-        list_frame.pack(fill="both", expand=True)
+        list_Frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
+        list_Frame.pack(fill="both", expand=True)
 
         cols = ("ID", "Name", "DOB", "Phone", "Doctor")
         self.patients_tree = ttk.Treeview(
-            list_frame, columns=cols, show="headings", height=12)
+            list_Frame, columns=cols, show="headings", height=12)
         for c in cols:
             self.patients_tree.heading(c, text=c)
             self.patients_tree.column(c, width=150)
@@ -292,16 +292,16 @@ class ClinicApp:
 
         tk.Button(form, text="Record Visit", bg="#38a169", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
                   padx=20, pady=5, cursor="hand2", command=self.add_visit).grid(row=4, column=1, pady=10, sticky="e")
-        
-        tk.Button(parent, text="Delete Selected Visit", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
-                  bd=0, padx=15, pady=4, cursor="hand2", command=self.delete_visit).pack(anchor="e", pady=(0, 10)) 
 
-        list_frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
-        list_frame.pack(fill="both", expand=True)
+        tk.Button(parent, text="Delete Selected Visit", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
+                  bd=0, padx=15, pady=4, cursor="hand2", command=self.delete_visit).pack(anchor="e", pady=(0, 10))
+
+        list_Frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
+        list_Frame.pack(fill="both", expand=True)
 
         cols = ("ID", "Patient", "Date", "Symptoms", "Diagnosis", "Amount")
         self.visits_tree = ttk.Treeview(
-            list_frame, columns=cols, show="headings", height=12)
+            list_Frame, columns=cols, show="headings", height=12)
         for c in cols:
             self.visits_tree.heading(c, text=c)
             self.visits_tree.column(c, width=140)
@@ -332,40 +332,35 @@ class ClinicApp:
         tk.Button(form, text="Record Payment", bg="#38a169", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
                   padx=20, pady=5, cursor="hand2", command=self.add_payment).grid(row=3, column=1, pady=10, sticky="e")
 
-        	
         tk.Button(parent, text="Delete Selected Payment", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
                   bd=0, padx=15, pady=4, cursor="hand2", command=self.delete_payment).pack(anchor="e", pady=(0, 10))
 
-
-        list_frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
-        list_frame.pack(fill="both", expand=True)
-
-
+        list_Frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
+        list_Frame.pack(fill="both", expand=True)
 
         cols = ("ID", "Patient", "Visit Date",
                 "Amount Paid", "Method", "Payment Date")
         self.payments_tree = ttk.Treeview(
-            list_frame, columns=cols, show="headings", height=12)
+            list_Frame, columns=cols, show="headings", height=12)
         for c in cols:
             self.payments_tree.heading(c, text=c)
             self.payments_tree.column(c, width=150)
         self.payments_tree.pack(fill="both", expand=True, padx=10, pady=10)
 
     def build_balances_screen(self, parent):
-        list_frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
-        list_frame.pack(fill="both", expand=True)
+        list_Frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
+        list_Frame.pack(fill="both", expand=True)
 
-        header_row = tk.Frame(list_frame, bg="white")
+        header_row = tk.Frame(list_Frame, bg="white")
         header_row.pack(fill="x", padx=15, pady=15)
         tk.Label(header_row, text="Outstanding Balances", font=("Segoe UI", 14, "bold"),
                  bg="white", fg="#1e3a5f").pack(side="left")
         tk.Button(header_row, text="Export to CSV", bg="#2c5282", fg="white", font=("Segoe UI", 10, "bold"),
                   bd=0, padx=15, pady=4, cursor="hand2", command=self.export_balances).pack(side="right")
 
-
         cols = ("Patient", "Total Required", "Total Paid", "Balance", "Doctor")
         self.balances_tree = ttk.Treeview(
-            list_frame, columns=cols, show="headings", height=18)
+            list_Frame, columns=cols, show="headings", height=18)
         for c in cols:
             self.balances_tree.heading(c, text=c)
             self.balances_tree.column(c, width=170)
@@ -433,7 +428,8 @@ class ClinicApp:
         visit = self.pay_visit.get()
         amount = self.pay_amount.get()
         if not visit or not amount:
-            messagebox.showwarning("Missing", "Please select a visit and enter an amount")
+            messagebox.showwarning(
+                "Missing", "Please select a visit and enter an amount")
             return
         try:
             amount = float(amount)
@@ -449,7 +445,8 @@ class ClinicApp:
         """, (bill_id,))[0]
 
         if amount > balance:
-            messagebox.showwarning("Overpayment", f"Balance is only ${balance:.2f}")
+            messagebox.showwarning(
+                "Overpayment", f"Balance is only ${balance:.2f}")
             return
         self.db.execute("INSERT INTO payments (bill_id, amount_paid, payment_method) VALUES (?, ?, ?)",
                         (bill_id, amount, self.pay_method.get()))
@@ -506,7 +503,8 @@ class ClinicApp:
             GROUP BY v.visit_id ORDER BY v.visit_date DESC LIMIT 10
         """)
         for r in rows:
-            self.recent_tree.insert("", "end", values=(r[0], r[1], f"${r[2]:.2f}", f"${r[3]:.2f}", f"${r[4]:.2f}"))
+            self.recent_tree.insert("", "end", values=(
+                r[0], r[1], f"${r[2]:.2f}", f"${r[3]:.2f}", f"${r[4]:.2f}"))
 
     def refresh_doctors(self):
         for item in self.doctors_tree.get_children():
@@ -525,14 +523,16 @@ class ClinicApp:
         for item in self.patients_tree.get_children():
             self.patients_tree.delete(item)
         term = self.pat_search.get().strip() if hasattr(self, "pat_search") else ""
-        doctors = {str(d[0]): d[1] for d in self.db.fetchall("SELECT doctor_id, full_name FROM doctors")}
+        doctors = {str(d[0]): d[1] for d in self.db.fetchall(
+            "SELECT doctor_id, full_name FROM doctors")}
         rows = self.db.fetchall(
             "SELECT patient_id, full_name, date_of_birth, phone, doctor_id FROM patients WHERE full_name LIKE ?",
             (f"%{term}%",)
         )
         for row in rows:
             doc_name = doctors.get(str(row[4]), "None")
-            self.patients_tree.insert("", "end", values=(row[0], row[1], row[2], row[3], doc_name))
+            self.patients_tree.insert("", "end", values=(
+                row[0], row[1], row[2], row[3], doc_name))
 
     def refresh_payments(self):
         for item in self.payments_tree.get_children():
@@ -546,7 +546,8 @@ class ClinicApp:
             ORDER BY pay.payment_date DESC
         """)
         for r in rows:
-            self.payments_tree.insert("", "end", values=(r[0], r[1], r[2], f"${r[3]:.2f}", r[4], r[5]))
+            self.payments_tree.insert("", "end", values=(
+                r[0], r[1], r[2], f"${r[3]:.2f}", r[4], r[5]))
 
         visit_rows = self.db.fetchall("""
             SELECT b.bill_id, p.full_name, v.visit_date,
@@ -558,7 +559,8 @@ class ClinicApp:
             GROUP BY b.bill_id
             HAVING balance > 0
         """)
-        self.pay_visit["values"] = [f"{r[0]} - {r[1]} - {r[2]} - ${r[3]:.2f}" for r in visit_rows]
+        self.pay_visit["values"] = [
+            f"{r[0]} - {r[1]} - {r[2]} - ${r[3]:.2f}" for r in visit_rows]
 
     def refresh_balances(self):
         for item in self.balances_tree.get_children():
@@ -576,7 +578,7 @@ class ClinicApp:
         """)
         for r in rows:
             self.balances_tree.insert("", "end", values=(r[0], f"${r[1]:.2f}", f"${r[2]:.2f}",
-                                                          f"${r[3]:.2f}", r[4] or "None"))
+                                                         f"${r[3]:.2f}", r[4] or "None"))
 
 
 if __name__ == "__main__":
