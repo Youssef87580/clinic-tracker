@@ -247,8 +247,8 @@ class ClinicApp:
 
         search_row = tk.Frame(parent, bg="#eef2f5")
         search_row.pack(fill="x", pady=(0, 10))
-        tk.label(search_row, text="search:", bg="#eef2f5").pack(side="left")
-        self.pat_search = tk.entry(search_row, width=30)
+        tk.Label(search_row, text="Search:", bg="#eef2f5").pack(side="left")
+        self.pat_search = tk.Entry(search_row, width=30)
         self.pat_search.pack(side="left", padx=5)
         self.pat_search.bind("<KeyRelease>", lambda e: self.refresh_patients())
         tk.Button(search_row, text="Delete Selected", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
@@ -579,7 +579,238 @@ class ClinicApp:
         for r in rows:
             self.balances_tree.insert("", "end", values=(r[0], f"${r[1]:.2f}", f"${r[2]:.2f}",
                                                          f"${r[3]:.2f}", r[4] or "None"))
+            
+    def refresh_visits(self):
+        for item in self.visits_tree.get_children():
+            self.visits_tree.delete(item)
 
+        rows = self.db.fetchall("""
+            SELECT v.visit_id,
+                   p.full_name,
+                   v.visit_date,
+                   v.symptoms,
+                   v.diagnosis,
+                   b.amount_required
+            FROM visits v
+            JOIN patients p ON v.patient_id = p.patient_id
+            JOIN bills b ON v.visit_id = b.visit_id
+            ORDER BY v.visit_date DESC
+        """)
+
+        for row in rows:
+            self.visits_tree.insert("", "end", values=(
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                f"${row[5]:.2f}"
+            ))
+
+        patients = self.db.fetchall("""
+            SELECT patient_id, full_name
+            FROM patients
+            ORDER BY full_name
+        """)
+
+        self.visit_patient["values"] = [
+            f"{p[0]} - {p[1]}" for p in patients
+        ]
+
+        doctors = self.db.fetchall("""
+            SELECT doctor_id, full_name
+            FROM doctors
+            ORDER BY full_name
+        """)
+
+        self.pat_doctor["values"] = [
+            f"{d[0]} - {d[1]}" for d in doctors
+        ]
+
+    def delete_doctor(self):
+        selected = self.doctors_tree.selection()
+
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a doctor.")
+            return
+
+        doctor_id = self.doctors_tree.item(selected[0])["values"][0]
+
+        patients = self.db.fetchone(
+            "SELECT COUNT(*) FROM patients WHERE doctor_id = ?",
+            (doctor_id,)
+        )[0]
+
+        if patients > 0:
+            messagebox.showwarning(
+                "Cannot Delete",
+                "This doctor still has patients assigned."
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            "Are you sure you want to delete this doctor?"
+        ):
+            return
+
+        self.db.execute(
+            "DELETE FROM doctors WHERE doctor_id = ?",
+            (doctor_id,)
+        )
+
+        self.refresh_all_data()
+        messagebox.showinfo("Success", "Doctor deleted successfully.")
+
+
+    def delete_patient(self):
+        selected = self.patients_tree.selection()
+
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a patient.")
+            return
+
+        patient_id = self.patients_tree.item(selected[0])["values"][0]
+
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            "Delete this patient and all associated visits, bills, and payments?"
+        ):
+            return
+
+        visits = self.db.fetchall(
+            "SELECT visit_id FROM visits WHERE patient_id = ?",
+            (patient_id,)
+        )
+
+        for visit in visits:
+            visit_id = visit[0]
+
+            bills = self.db.fetchall(
+                "SELECT bill_id FROM bills WHERE visit_id = ?",
+                (visit_id,)
+            )
+
+            for bill in bills:
+                self.db.execute(
+                    "DELETE FROM payments WHERE bill_id = ?",
+                    (bill[0],)
+                )
+
+            self.db.execute(
+                "DELETE FROM bills WHERE visit_id = ?",
+                (visit_id,)
+            )
+
+        self.db.execute(
+            "DELETE FROM visits WHERE patient_id = ?",
+            (patient_id,)
+        )
+
+        self.db.execute(
+            "DELETE FROM patients WHERE patient_id = ?",
+            (patient_id,)
+        )
+
+        self.refresh_all_data()
+        messagebox.showinfo("Success", "Patient deleted successfully.")
+
+
+    def delete_visit(self):
+        selected = self.visits_tree.selection()
+
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a visit.")
+            return
+
+        visit_id = self.visits_tree.item(selected[0])["values"][0]
+
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            "Are you sure you want to delete this visit?"
+        ):
+            return
+
+        bills = self.db.fetchall(
+            "SELECT bill_id FROM bills WHERE visit_id = ?",
+            (visit_id,)
+        )
+
+        for bill in bills:
+            self.db.execute(
+                "DELETE FROM payments WHERE bill_id = ?",
+                (bill[0],)
+            )
+
+        self.db.execute(
+            "DELETE FROM bills WHERE visit_id = ?",
+            (visit_id,)
+        )
+
+        self.db.execute(
+            "DELETE FROM visits WHERE visit_id = ?",
+            (visit_id,)
+        )
+
+        self.refresh_all_data()
+        messagebox.showinfo("Success", "Visit deleted successfully.")
+
+
+    def delete_payment(self):
+        selected = self.payments_tree.selection()
+
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a payment.")
+            return
+
+        payment_id = self.payments_tree.item(selected[0])["values"][0]
+
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            "Are you sure you want to delete this payment?"
+        ):
+            return
+
+        self.db.execute(
+            "DELETE FROM payments WHERE payment_id = ?",
+            (payment_id,)
+        )
+
+        self.refresh_all_data()
+        messagebox.showinfo("Success", "Payment deleted successfully.")
+
+
+    def export_balances(self):
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv")],
+            title="Export Balances"
+        )
+
+        if not filename:
+            return
+
+        with open(filename, "w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+
+            writer.writerow([
+                "Patient",
+                "Total Required",
+                "Total Paid",
+                "Balance",
+                "Doctor"
+            ])
+
+            for item in self.balances_tree.get_children():
+                writer.writerow(self.balances_tree.item(item)["values"])
+
+        messagebox.showinfo(
+            "Success",
+            "Balances exported successfully."
+        )
+
+
+            
 
 if __name__ == "__main__":
     root = tk.Tk()
