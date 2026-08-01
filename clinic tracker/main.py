@@ -2,6 +2,13 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import sqlite3
 import csv
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+UPLOADS_DIR = "patient_uploads"
 
 
 class Database:
@@ -53,6 +60,17 @@ class Database:
                 payment_method TEXT DEFAULT 'cash',
                 FOREIGN KEY (bill_id) REFERENCES bills(bill_id)
             );
+
+             CREATE TABLE IF NOT EXISTS patient_files (
+                file_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_id INTEGER NOT NULL,
+                visit_id INTEGER,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (patient_id) REFERENCES patients(patient_id),
+                FOREIGN KEY (visit_id) REFERENCES visits(visit_id)
+            );
         """)
         self.conn.commit()
 
@@ -74,6 +92,7 @@ class ClinicApp:
     def __init__(self, root):
         self.db = Database()
         self.root = root
+        self.current_patient_id = None
         self.root.title("Clinic Management System")
         self.root.geometry("1100x700")
         self.root.configure(bg="#eef2f5")
@@ -81,12 +100,12 @@ class ClinicApp:
 
         self.style = ttk.Style()
         self.style.theme_use("clam")
-        self.style.configure("Sidebar.TButton", font=("Segoe UI", 11), foreground="white",
-                             background="#1e3a5f", padding=10)
+        self.style.configure("Sidebar.TButton", font=(
+            "Segoe UI", 11), foreground="white", background="#1e3a5f", padding=10)
         self.style.map("Sidebar.TButton", background=[("active", "#2c5282")])
         self.style.configure("Card.TFrame", background="white")
-        self.style.configure("Card.TLabel", background="white", font=("Segoe UI", 14, "bold"),
-                             foreground="#1e3a5f")
+        self.style.configure("Card.TLabel", background="white", font=(
+            "Segoe UI", 14, "bold"), foreground="#1e3a5f")
         self.style.configure("Action.TButton", font=("Segoe UI", 10, "bold"))
 
         self.build_sidebar()
@@ -132,15 +151,16 @@ class ClinicApp:
         self.screen_container = tk.Frame(self.content, bg="#eef2f5")
         self.screen_container.pack(fill="both", expand=True)
 
-    def show_screen(self, name):
-        self.header.config(text=name.title())
+    def show_screen(self, name, header_override=None):
+        self.header.config(
+            text=header_override if header_override else name.replace("_", " ").title())
         Frame = self.screens[name]
         Frame.tkraise()
         self.refresh_screen(name)
 
     def build_all_screens(self):
         self.screens = {}
-        for name in ["dashboard", "doctors", "patients", "visits", "payments", "balances"]:
+        for name in ["dashboard", "doctors", "patients", "visits", "payments", "balances", "patient_detail"]:
             Frame = tk.Frame(self.screen_container, bg="#eef2f5")
             Frame.place(relwidth=1, relheight=1)
             self.screens[name] = Frame
@@ -222,54 +242,129 @@ class ClinicApp:
         self.doctors_tree.pack(fill="both", expand=True, padx=10, pady=10)
 
     def build_patients_screen(self, parent):
-        form = tk.LabelFrame(parent, text="Add Patient", bg="white", font=("Segoe UI", 11, "bold"),
-                             fg="#1e3a5f", padx=15, pady=15)
-        form.pack(fill="x", pady=(0, 15))
-
-        fields = [("Full Name:", "pat_name"), ("Date of Birth:", "pat_dob"),
-                  ("Phone:", "pat_phone"), ("Address:", "pat_address")]
-        self.pat_entries = {}
-
-        for i, (label, attr) in enumerate(fields):
-            tk.Label(form, text=label, bg="white").grid(
-                row=i, column=0, sticky="w")
-            ent = tk.Entry(form, width=30)
-            ent.grid(row=i, column=1, padx=5, pady=3)
-            self.pat_entries[attr] = ent
-
-        tk.Label(form, text="Doctor:", bg="white").grid(
-            row=4, column=0, sticky="w")
-        self.pat_doctor = ttk.Combobox(form, width=28, state="readonly")
-        self.pat_doctor.grid(row=4, column=1, padx=5, pady=3)
-
-        tk.Button(form, text="Add Patient", bg="#38a169", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
-                  padx=20, pady=5, cursor="hand2", command=self.add_patient).grid(row=5, column=1, pady=10, sticky="e")
-
-        search_row = tk.Frame(parent, bg="#eef2f5")
-        search_row.pack(fill="x", pady=(0, 10))
-        tk.Label(search_row, text="Search:", bg="#eef2f5").pack(side="left")
-        self.pat_search = tk.Entry(search_row, width=30)
+        top_bar = tk.Frame(parent, bg="#eef2f5")
+        top_bar.pack(fill="x", pady=(0, 15))
+        tk.Label(top_bar, text="Search:", bg="#eef2f5").pack(side="left")
+        self.pat_search = tk.Entry(top_bar, width=30)
         self.pat_search.pack(side="left", padx=5)
         self.pat_search.bind("<KeyRelease>", lambda e: self.refresh_patients())
-        tk.Button(search_row, text="Delete Selected", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
-                  bd=0, padx=15, pady=4, cursor="hand2", command=self.delete_patient).pack(side="right")
+        tk.Button(top_bar, text="+ Add Patient", bg="#38a169", fg="white", font=("Segoe UI", 10, "bold"),
+                  bd=0, padx=15, pady=6, cursor="hand2", command=self.open_add_patient_modal).pack(side="right")
+        canvas_holder = tk.Frame(parent, bg="#eef2f5")
+        canvas_holder.pack(fill="both", expand=True)
+        self.patients_canvas = tk.Canvas(
+            canvas_holder, bg="#eef2f5", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            canvas_holder, orient="vertical", command=self.patients_canvas.yview)
+        self.patients_list_frame = tk.Frame(self.patients_canvas, bg="#eef2f5")
+        window_id = self.patients_canvas.create_window(
+            (0, 0), window=self.patients_list_frame, anchor="nw")
+        self.patients_list_frame.bind("<Configure>", lambda e: self.patients_canvas.configure(
+            scrollregion=self.patients_canvas.bbox("all")))
+        self.patients_canvas.bind(
+            "<Configure>", lambda e: self.patients_canvas.itemconfig(window_id, width=e.width))
+        self.patients_canvas.configure(yscrollcommand=scrollbar.set)
+        self.patients_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        list_Frame = tk.Frame(parent, bg="white", bd=1, relief="solid")
-        list_Frame.pack(fill="both", expand=True)
+    def open_add_patient_modal(self):
+        win = tk.Toplevel(self.root)
+        win.title("Add patient")
+        win.geometry("380x430")
+        win.configure(bg="white")
+        win.grab_set()
+        tk.Label(win, text="Add New Patient", font=("Segoe UI", 14, "bold"),
+                 bg="white", fg="#1e3a5f").pack(anchor="w", padx=20, pady=(20, 15))
+        fields = [("Full Name:", "name"), ("Date of Birth:", "dob"),
+                  ("Phone:", "phone"), ("Address:", "address")]
+        entries = {}
+        for label, key in fields:
+            tk.Label(win, text=label, bg="white", font=(
+                "Segoe UI", 9), fg="#444").pack(anchor="w", padx=20)
+            ent = tk.Entry(win, width=36)
+            ent.pack(padx=20, pady=(2, 10))
+            entries[key] = ent
+        tk.Label(win, text="Doctor:", bg="white", font=(
+            "Segoe UI", 9), fg="#444").pack(anchor="w", padx=20)
+        doctors = self.db.fetchall(
+            "SELECT doctor_id, full_name FROM doctors ORDER BY full_name")
+        doctor_box = ttk.Combobox(win, width=34, state="readonly", values=[
+                                  f"{d[0]} - {d[1]}" for d in doctors])
+        doctor_box.pack(padx=20, pady=(2, 15))
 
-        cols = ("ID", "Name", "DOB", "Phone", "Doctor")
-        self.patients_tree = ttk.Treeview(
-            list_Frame, columns=cols, show="headings", height=12)
-        for c in cols:
-            self.patients_tree.heading(c, text=c)
-            self.patients_tree.column(c, width=150)
-        self.patients_tree.pack(fill="both", expand=True, padx=10, pady=10)
+        def submit():
+            name = entries["name"].get().strip()
+            if not name:
+                messagebox.showwarning("Missing", "Please enter a name")
+                return
+            doctor_id = doctor_box.get().split(
+                " - ")[0] if doctor_box.get() else None
+            self.db.execute("INSERT INTO patients (full_name, date_of_birth, phone, address, doctor_id) VALUES (?, ?, ?, ?, ?)",
+                            (name, entries["dob"].get(), entries["phone"].get(), entries["address"].get(), doctor_id))
+            self.refresh_all_data()
+            win.destroy()
+            messagebox.showinfo("Success", "Patient added!")
+        tk.Button(win, text="Add Patient", bg="#38a169", fg="white", font=(
+            "Segoe UI", 10, "bold"), bd=0, padx=20, pady=8, cursor="hand2", command=submit).pack(pady=10)
+
+    def build_patient_card(self, parent, patient_id, full_name, dob, phone, address, doctor_name, balance):
+        card = tk.Frame(parent, bg="white", bd=1, relief="solid",
+                        highlightbackground="#e2e8f0", highlightthickness=1)
+        card.pack(fill="x", pady=6, padx=2)
+
+        inner = tk.Frame(card, bg="white")
+        inner.pack(fill="x", padx=15, pady=12)
+
+        initials = "".join([w[0]
+                           for w in full_name.split()[:2]]).upper() or "?"
+        avatar = tk.Frame(inner, bg="#2c5282", width=56, height=56)
+        avatar.pack(side="left", padx=(0, 15))
+        avatar.pack_propagate(False)
+        tk.Label(avatar, text=initials, bg="#2c5282", fg="white",
+                 font=("Segoe UI", 16, "bold")).pack(expand=True)
+
+        mid = tk.Frame(inner, bg="white")
+        mid.pack(side="left", fill="both", expand=True)
+
+        top_row = tk.Frame(mid, bg="white")
+        top_row.pack(fill="x")
+        tk.Label(top_row, text=full_name, font=("Segoe UI", 13, "bold"),
+                 bg="white", fg="#1e3a5f").pack(side="left")
+
+        if balance and balance > 0:
+            badge = tk.Label(top_row, text=f"Owes ${balance:.2f}", font=(
+                "Segoe UI", 9, "bold"), bg="#fdecec", fg="#e53e3e", padx=8, pady=2)
+        else:
+            badge = tk.Label(top_row, text="Paid Up", font=(
+                "Segoe UI", 9, "bold"), bg="#e6f6ec", fg="#38a169", padx=8, pady=2)
+        badge.pack(side="right")
+
+        info_row = tk.Label(
+            mid, text=f"\U0001F4DE {phone or 'N/A'}     \U0001F382 {dob or 'N/A'}", font=("Segoe UI", 9), bg="white", fg="#666")
+        info_row.pack(anchor="w", pady=(4, 4))
+
+        tag_row = tk.Frame(mid, bg="white")
+        tag_row.pack(anchor="w")
+        tk.Label(tag_row, text=f"Dr. {doctor_name}" if doctor_name else "Unassigned", font=(
+            "Segoe UI", 8, "bold"), bg="#eaf4fb", fg="#2c5282", padx=6, pady=2).pack(side="left", padx=(0, 6))
+        if address:
+            tk.Label(tag_row, text=f"\U0001F4CD {address}", font=(
+                "Segoe UI", 8), bg="#f4f4f4", fg="#666", padx=6, pady=2).pack(side="left")
+
+        action_col = tk.Frame(inner, bg="white")
+        action_col.pack(side="right", padx=(15, 0))
+        tk.Button(action_col, text="Open File", bg="#5b6bf5", fg="white", font=("Segoe UI", 9, "bold"), bd=0,
+                  padx=14, pady=6, cursor="hand2", command=lambda pid=patient_id: self.open_patient_file(pid)).pack()
+
+        for w in (card, inner, mid, top_row, info_row, tag_row):
+            w.bind("<Double-Button-1>", lambda e,
+                   pid=patient_id: self.open_patient_file(pid))
+            w.configure(cursor="hand2")
 
     def build_visits_screen(self, parent):
-        form = tk.LabelFrame(parent, text="Record Visit", bg="white", font=("Segoe UI", 11, "bold"),
-                             fg="#1e3a5f", padx=15, pady=15)
+        form = tk.LabelFrame(parent, text="Record Visit", bg="white", font=(
+            "Segoe UI", 11, "bold"), fg="#1e3a5f", padx=15, pady=15)
         form.pack(fill="x", pady=(0, 15))
-
         tk.Label(form, text="Patient:", bg="white").grid(
             row=0, column=0, sticky="w")
         self.visit_patient = ttk.Combobox(form, width=38, state="readonly")
@@ -367,6 +462,312 @@ class ClinicApp:
         self.balances_tree.pack(
             fill="both", expand=True, padx=15, pady=(0, 15))
 
+    def build_patient_detail_screen(self, parent):
+        top_bar = tk.Frame(parent, bg="#eef2f5")
+        top_bar.pack(fill="x", pady=(0, 10))
+
+        tk.Button(top_bar, text="\u2190 Back to Patients", bg="#1e3a5f", fg="white",
+                  font=("Segoe UI", 10, "bold"), bd=0, padx=15, pady=6, cursor="hand2",
+                  command=lambda: self.show_screen("patients")).pack(side="left")
+        tk.Button(top_bar, text="Delete Patient", bg="#e53e3e", fg="white", font=("Segoe UI", 10, "bold"),
+                  bd=0, padx=15, pady=6, cursor="hand2", command=self.delete_current_patient).pack(side="right")
+
+        tk.Button(top_bar, text="Upload Image to Patient File", bg="#38a169", fg="white",
+                  font=("Segoe UI", 10, "bold"), bd=0, padx=15, pady=6, cursor="hand2",
+                  command=lambda: self.upload_image(self.current_patient_id, None)).pack(side="right", padx=(0, 8))
+
+        info_card = tk.Frame(parent, bg="white", bd=1, relief="solid",
+                             highlightbackground="#ddd", highlightthickness=1)
+        info_card.pack(fill="x", pady=(0, 15))
+        self.pd_name_label = tk.Label(info_card, text="", font=(
+            "Segoe UI", 16, "bold"), bg="white", fg="#1e3a5f")
+        self.pd_name_label.pack(anchor="w", padx=15, pady=(15, 5))
+        self.pd_info_label = tk.Label(info_card, text="", font=(
+            "Segoe UI", 10), bg="white", fg="#555", justify="left")
+        self.pd_info_label.pack(anchor="w", padx=15, pady=(0, 15))
+        files_card = tk.Frame(parent, bg="white", bd=1, relief="solid",
+                              highlightbackground="#ddd", highlightthickness=1)
+        files_card.pack(fill="x", pady=(0, 15))
+        tk.Label(files_card, text="Uploaded Files", font=("Segoe UI", 12, "bold"),
+                 bg="white", fg="#1e3a5f").pack(anchor="w", padx=15, pady=(10, 5))
+        self.pd_files_list = tk.Frame(files_card, bg="white")
+        self.pd_files_list.pack(fill="x", padx=15, pady=(0, 12))
+        visits_card = tk.Frame(parent, bg="white", bd=1, relief="solid",
+                               highlightbackground="#ddd", highlightthickness=1)
+        visits_card.pack(fill="both", expand=True)
+        tk.Label(visits_card, text="Visits", font=("segoe ui", 12, "bold"),
+                 bg="white", fg="#1e3a5f").pack(anchor="w", padx=15, pady=(10, 5))
+        canvas_holder = tk.Frame(visits_card, bg="white")
+        canvas_holder.pack(fill="both", expand=True, padx=14, pady=(0, 15))
+        self.pd_canvas = tk.Canvas(
+            canvas_holder, bg="white", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            canvas_holder, orient="vertical", command=self.pd_canvas.yview)
+        self.pd_cards_frame = tk.Frame(self.pd_canvas, bg="white")
+        self.pd_cards_frame.bind(
+            "<Configure>",
+            lambda e: self.pd_canvas.configure(
+                scrollregion=self.pd_canvas.bbox("all"))
+        )
+        self.pd_canvas.create_window(
+            (0, 0), window=self.pd_cards_frame, anchor="nw")
+        self.pd_canvas.configure(yscrollcommand=scrollbar.set)
+        self.pd_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+    def open_patient_file(self, patient_id):
+        self.current_patient_id = patient_id
+        patient = self.db.fetchone("""
+            SELECT p.full_name, p.date_of_birth, p.phone, p.address, d.full_name
+            FROM patients p LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
+            WHERE p.patient_id = ?
+        """, (patient_id,))
+        if not patient:
+            messagebox.showerror("Error", "Patient not found.")
+            return
+        self.show_screen("patient_detail",
+                         header_override=f"Patient File \u2013 {patient[0]}")
+
+    def build_file_card(self, parent, file_id, file_name, file_path, tag_text=None):
+        row = tk.Frame(parent, bg="white", bd=1, relief="solid",
+                       highlightbackground="#eee", highlightthickness=1)
+        row.pack(fill="x", pady=4)
+
+        inner = tk.Frame(row, bg="white")
+        inner.pack(fill="x", padx=10, pady=8)
+
+        thumb = tk.Frame(inner, bg="#eaf4fb", width=40, height=40)
+        thumb.pack(side="left")
+        thumb.pack_propagate(False)
+        tk.Label(thumb, text="\U0001F5BC", bg="#eaf4fb",
+                 font=("Segoe UI", 16)).pack(expand=True)
+
+        text_col = tk.Frame(inner, bg="white")
+        text_col.pack(side="left", fill="x", expand=True, padx=10)
+        tk.Label(text_col, text=file_name, font=("Segoe UI", 10, "bold"),
+                 bg="white", fg="#333", anchor="w").pack(anchor="w")
+        if tag_text:
+            tk.Label(text_col, text=tag_text, font=("Segoe UI", 8),
+                     bg="white", fg="#999", anchor="w").pack(anchor="w")
+
+        btns = tk.Frame(inner, bg="white")
+        btns.pack(side="right")
+        tk.Button(btns, text="Open", bg="#2c5282", fg="white", bd=0, padx=10, pady=3, cursor="hand2",
+                  command=lambda p=file_path: self.open_file_external(p)).pack(side="left", padx=4)
+        tk.Button(btns, text="Delete", bg="#e53e3e", fg="white", bd=0, padx=10, pady=3, cursor="hand2",
+                  command=lambda fid=file_id: self.delete_patient_file(fid)).pack(side="left")
+
+    def refresh_patient_detail(self):
+        if self.current_patient_id is None:
+            return
+        patient_id = self.current_patient_id
+        patient = self.db.fetchone("""
+            SELECT p.full_name, p.date_of_birth, p.phone, p.address, d.full_name
+            FROM patients p LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
+            WHERE p.patient_id = ?
+        """, (patient_id,))
+        if not patient:
+            self.show_screen("patients")
+            return
+
+        self.pd_name_label.config(text=patient[0])
+        self.pd_info_label.config(
+            text=f"DOB: {patient[1] or 'N/A'}    |    Phone: {patient[2] or 'N/A'}\n" f"Address: {patient[3] or 'N/A'}    |    Doctor: {patient[4] or 'Unassigned'}")
+        for w in self.pd_files_list.winfo_children():
+            w.destroy()
+        files = self.db.fetchall("""
+            SELECT pf.file_id, pf.file_name, pf.file_path, v.visit_date
+            FROM patient_files pf
+            LEFT JOIN visits v ON pf.visit_id = v.visit_id
+            WHERE pf.patient_id = ?
+            ORDER BY pf.uploaded_at DESC
+        """, (patient_id,))
+
+        if not files:
+            tk.Label(self.pd_files_list, text="No files uploaded yet.",
+                     bg="white", fg="#999").pack(anchor="w")
+        else:
+            for file_id, file_name, file_path, visit_date in files:
+                tag = f"From visit: {visit_date}" if visit_date else "General patient file"
+                self.build_file_card(self.pd_files_list,
+                                     file_id, file_name, file_path, tag)
+
+        for w in self.pd_cards_frame.winfo_children():
+            w.destroy()
+        visits = self.db.fetchall("""
+            SELECT v.visit_id, v.visit_date, v.symptoms, v.diagnosis, b.amount_required
+            FROM visits v LEFT JOIN bills b ON v.visit_id = b.visit_id
+            WHERE v.patient_id = ?
+            ORDER BY v.visit_date DESC
+        """, (patient_id,))
+        cols_per_row = 3
+        if not visits:
+            tk.Label(self.pd_cards_frame, text="No visits recorded yet.",
+                     bg="white", fg="#999").grid(row=0, column=0, sticky="w", pady=10)
+        else:
+            for idx, (visit_id, visit_date, symptoms, diagnosis, amount) in enumerate(visits):
+                r, c = divmod(idx, cols_per_row)
+                self.build_visit_card(
+                    self.pd_cards_frame, r, c, visit_id, visit_date, symptoms, diagnosis, amount)
+
+    def build_visit_card(self, parent, row, col, visit_id, visit_date, symptoms, diagnosis, amount):
+        card = tk.Frame(parent, bg="#eaf4fb", bd=1, relief="solid",
+                        highlightbackground="#cfe3f0", highlightthickness=1, width=220, height=120)
+        card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+        card.grid_propagate(False)
+
+        date_lbl = tk.Label(card, text=str(visit_date), font=(
+            "Segoe UI", 11, "bold"), bg="#eaf4fb", fg="#1e3a5f", anchor="w")
+        date_lbl.pack(fill="x", padx=10, pady=(10, 2))
+        symptoms_text = (symptoms or "No symptoms noted")
+        diagnosis_text = (diagnosis or "No diagnosis noted")
+
+        sym_lbl = tk.Label(card, text=f"Symptoms: {symptoms_text}", font=(
+            "Segoe UI", 9), bg="#eaf4fb", fg="#444", anchor="w", wraplength=190, justify="left")
+        sym_lbl.pack(fill="x", padx=10)
+
+        diag_lbl = tk.Label(card, text=f"Diagnosis: {diagnosis_text}", font=(
+            "Segoe UI", 9), bg="#eaf4fb", fg="#444", anchor="w", wraplength=190, justify="left")
+        diag_lbl.pack(fill="x", padx=10)
+
+        amt_text = f"${amount:.2f}" if amount is not None else "N/A"
+        amt_lbl = tk.Label(card, text=f"Amount: {amt_text}", font=(
+            "Segoe UI", 9, "bold"), bg="#eaf4fb", fg="#2c5282", anchor="w")
+        amt_lbl.pack(fill="x", padx=10, pady=(2, 10))
+
+        for widget in (card, date_lbl, sym_lbl, diag_lbl, amt_lbl):
+            widget.bind("<Button-1>", lambda e,
+                        vid=visit_id: self.show_visit_details(vid))
+            widget.configure(cursor="hand2")
+
+    def show_visit_details(self, visit_id):
+        visit = self.db.fetchone("""
+            SELECT v.visit_id, v.visit_date, v.symptoms, v.diagnosis, b.amount_required, p.full_name, p.patient_id
+            FROM visits v
+            JOIN patients p ON v.patient_id = p.patient_id
+            LEFT JOIN bills b ON v.visit_id = b.visit_id
+            WHERE v.visit_id = ?
+        """, (visit_id,))
+        if not visit:
+            messagebox.showerror("Error", "Visit not found.")
+            return
+        _, visit_date, symptoms, diagnosis, amount, patient_name, patient_id = visit
+        win = tk.Toplevel(self.root)
+        win.title(f"Visit Details \u2013 {patient_name}")
+        win.geometry("450x450")
+        win.configure(bg="white")
+
+        tk.Label(win, text=f"{patient_name}", font=("Segoe UI", 14, "bold"),
+                 bg="white", fg="#1e3a5f").pack(anchor="w", padx=15, pady=(15, 5))
+        tk.Label(win, text=f"Visit Date: {visit_date}", bg="white", fg="#444").pack(
+            anchor="w", padx=15)
+        tk.Label(win, text=f"Symptoms: {symptoms or 'N/A'}", bg="white", fg="#444",
+                 wraplength=400, justify="left").pack(anchor="w", padx=15, pady=(5, 0))
+        tk.Label(win, text=f"Diagnosis: {diagnosis or 'N/A'}", bg="white", fg="#444",
+                 wraplength=400, justify="left").pack(anchor="w", padx=15, pady=(5, 0))
+        amt_text = f"${amount:.2f}" if amount is not None else "N/A"
+        tk.Label(win, text=f"Amount Required: {amt_text}", bg="white", fg="#2c5282", font=(
+            "Segoe UI", 10, "bold")).pack(anchor="w", padx=15, pady=(5, 15))
+
+        tk.Button(win, text="Upload Image for this Visit", bg="#38a169", fg="white",
+                  font=("Segoe UI", 10, "bold"), bd=0, padx=15, pady=6, cursor="hand2",
+                  command=lambda: self.upload_image(patient_id, visit_id, refresh_window=win)).pack(anchor="w", padx=15, pady=(0, 10))
+        tk.Label(win, text="Files for this visit:", font=("Segoe UI", 11, "bold"),
+                 bg="white", fg="#1e3a5f").pack(anchor="w", padx=15, pady=(5, 5))
+
+        files_frame = tk.Frame(win, bg="white")
+        files_frame.pack(fill="both", expand=True, padx=15)
+
+        def render_files():
+            for w in files_frame.winfo_children():
+                w.destroy()
+            files = self.db.fetchall(
+                "SELECT file_id, file_name, file_path FROM patient_files WHERE visit_id = ? ORDER BY uploaded_at DESC",
+                (visit_id,)
+            )
+            if not files:
+                tk.Label(files_frame, text="No files uploaded for this visit yet.",
+                         bg="white", fg="#999").pack(anchor="w")
+            for file_id, file_name, file_path in files:
+                row = tk.Frame(files_frame, bg="white")
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text=f"\U0001F4CE {file_name}", bg="white", fg="#333").pack(
+                    side="left")
+                tk.Button(row, text="Open", bg="#2c5282", fg="white", bd=0, padx=8, pady=1, cursor="hand2",
+                          command=lambda p=file_path: self.open_file_external(p)).pack(side="left", padx=6)
+                tk.Button(row, text="Delete", bg="#e53e3e", fg="white", bd=0, padx=8, pady=1, cursor="hand2",
+                          command=lambda fid=file_id: (self.delete_patient_file(fid), render_files())).pack(side="left")
+
+        render_files()
+        win.render_files = render_files
+
+    def upload_image(self, patient_id, visit_id, refresh_window=None):
+        if patient_id is None:
+            messagebox.showwarning("No Patient", "No patient selected.")
+            return
+        filepath = filedialog.askopenfilename(
+            title="Select Image",
+            filetypes=[
+                ("Image Files", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"), ("All Files", "*.*")]
+        )
+        if not filepath:
+            return
+
+        patient_folder = os.path.join(UPLOADS_DIR, str(patient_id))
+        os.makedirs(patient_folder, exist_ok=True)
+
+        original_name = os.path.basename(filepath)
+        unique_name = f"{int(time.time() * 1000)}_{original_name}"
+        dest_path = os.path.join(patient_folder, unique_name)
+
+        try:
+            shutil.copy2(filepath, dest_path)
+        except Exception as e:
+            messagebox.showerror("Upload Failed", f"Could not copy file: {e}")
+            return
+
+        self.db.execute(
+            "INSERT INTO patient_files (patient_id, visit_id, file_name, file_path) VALUES (?, ?, ?, ?)",
+            (patient_id, visit_id, original_name, dest_path)
+        )
+
+        messagebox.showinfo("Success", "Image uploaded successfully.")
+
+        # refresh whichever view needs it
+        if refresh_window is not None and hasattr(refresh_window, "render_files"):
+            refresh_window.render_files()
+        if self.current_patient_id == patient_id:
+            self.refresh_patient_detail()
+
+    def delete_patient_file(self, file_id):
+        row = self.db.fetchone(
+            "SELECT file_path FROM patient_files WHERE file_id = ?", (file_id,))
+        if not row:
+            return
+        if not messagebox.askyesno("Confirm Delete", "Delete this file? This cannot be undone."):
+            return
+        file_path = row[0]
+        self.db.execute(
+            "DELETE FROM patient_files WHERE file_id = ?", (file_id,))
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+        if self.current_patient_id is not None:
+            self.refresh_patient_detail()
+
+    def open_file_external(self, path):
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path])
+            else:
+                subprocess.run(["xdg-open", path])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open file: {e}")
+
     def add_doctor(self):
         name = self.doc_name.get().strip()
         if not name:
@@ -379,23 +780,6 @@ class ClinicApp:
         self.doc_phone.delete(0, tk.END)
         self.refresh_all_data()
         messagebox.showinfo("Success", "Doctor added!")
-
-    def add_patient(self):
-        name = self.pat_entries["pat_name"].get().strip()
-        if not name:
-            messagebox.showwarning("Missing", "Please enter a name")
-            return
-        doctor_id = self.pat_doctor.get().split(
-            " - ")[0] if self.pat_doctor.get() else None
-        self.db.execute(
-            "INSERT INTO patients (full_name, date_of_birth, phone, address, doctor_id) VALUES (?, ?, ?, ?, ?)",
-            (name, self.pat_entries["pat_dob"].get(), self.pat_entries["pat_phone"].get(),
-             self.pat_entries["pat_address"].get(), doctor_id)
-        )
-        for ent in self.pat_entries.values():
-            ent.delete(0, tk.END)
-        self.refresh_all_data()
-        messagebox.showinfo("Success", "Patient added!")
 
     def add_visit(self):
         patient = self.visit_patient.get()
@@ -462,6 +846,8 @@ class ClinicApp:
         self.refresh_payments()
         self.refresh_balances()
         self.refresh_dashboard()
+        if self.current_patient_id is not None:
+            self.refresh_patient_detail()
 
     def refresh_screen(self, name):
         if name == "dashboard":
@@ -476,6 +862,8 @@ class ClinicApp:
             self.refresh_payments()
         elif name == "balances":
             self.refresh_balances()
+        elif name == "patient_detail":
+            self.refresh_patient_detail()
 
     def refresh_dashboard(self):
         counts = self.db.fetchone(
@@ -483,8 +871,8 @@ class ClinicApp:
             "(SELECT COALESCE(SUM(amount_paid), 0) FROM payments)"
         )
         outstanding = self.db.fetchone("""
-            SELECT COALESCE(SUM(b.amount_required), 0) - COALESCE(SUM(p.amount_paid), 0)
-            FROM bills b LEFT JOIN payments p ON b.bill_id = p.bill_id
+            SELECT (SELECT COALESCE(SUM(amount_required), 0) FROM bills)
+                 - (SELECT COALESCE(SUM(amount_paid), 0) FROM payments)
         """)[0]
 
         self.stat_cards["Total Doctors"].config(text=str(counts[0]))
@@ -520,19 +908,40 @@ class ClinicApp:
             self.doctors_tree.insert("", "end", values=row)
 
     def refresh_patients(self):
-        for item in self.patients_tree.get_children():
-            self.patients_tree.delete(item)
+        for w in self.patients_list_frame.winfo_children():
+            w.destroy()
+
         term = self.pat_search.get().strip() if hasattr(self, "pat_search") else ""
-        doctors = {str(d[0]): d[1] for d in self.db.fetchall(
-            "SELECT doctor_id, full_name FROM doctors")}
-        rows = self.db.fetchall(
-            "SELECT patient_id, full_name, date_of_birth, phone, doctor_id FROM patients WHERE full_name LIKE ?",
-            (f"%{term}%",)
-        )
-        for row in rows:
-            doc_name = doctors.get(str(row[4]), "None")
-            self.patients_tree.insert("", "end", values=(
-                row[0], row[1], row[2], row[3], doc_name))
+
+        rows = self.db.fetchall("""
+            SELECT p.patient_id, p.full_name, p.date_of_birth, p.phone, p.address,
+                   d.full_name AS doctor_name,
+                   COALESCE(bt.total_required, 0) - COALESCE(pt.total_paid, 0) AS balance
+            FROM patients p
+            LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
+            LEFT JOIN (
+                SELECT v.patient_id, SUM(b.amount_required) AS total_required
+                FROM visits v JOIN bills b ON v.visit_id = b.visit_id
+                GROUP BY v.patient_id
+            ) bt ON bt.patient_id = p.patient_id
+            LEFT JOIN (
+                SELECT v.patient_id, SUM(pay.amount_paid) AS total_paid
+                FROM visits v
+                JOIN bills b ON v.visit_id = b.visit_id
+                JOIN payments pay ON pay.bill_id = b.bill_id
+                GROUP BY v.patient_id
+            ) pt ON pt.patient_id = p.patient_id
+            WHERE p.full_name LIKE ?
+            ORDER BY p.full_name
+        """, (f"%{term}%",))
+
+        if not rows:
+            tk.Label(self.patients_list_frame, text="No patients found.",
+                     bg="#eef2f5", fg="#999").pack(pady=20)
+        else:
+            for patient_id, full_name, dob, phone, address, doctor_name, balance in rows:
+                self.build_patient_card(self.patients_list_frame, patient_id, full_name,
+                                        dob, phone, address, doctor_name, balance)
 
     def refresh_payments(self):
         for item in self.payments_tree.get_children():
@@ -566,20 +975,32 @@ class ClinicApp:
         for item in self.balances_tree.get_children():
             self.balances_tree.delete(item)
         rows = self.db.fetchall("""
-            SELECT p.full_name, COALESCE(SUM(b.amount_required), 0), COALESCE(SUM(pa.amount_paid), 0),
-                   COALESCE(SUM(b.amount_required), 0) - COALESCE(SUM(pa.amount_paid), 0), d.full_name
+            SELECT p.full_name,
+                   COALESCE(bt.total_required, 0) AS total_required,
+                   COALESCE(pt.total_paid, 0) AS total_paid,
+                   COALESCE(bt.total_required, 0) - COALESCE(pt.total_paid, 0) AS balance,
+                   d.full_name
             FROM patients p
-            LEFT JOIN visits v ON p.patient_id = v.patient_id
-            LEFT JOIN bills b ON v.visit_id = b.visit_id
-            LEFT JOIN payments pa ON b.bill_id = pa.bill_id
             LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
-            GROUP BY p.patient_id HAVING COALESCE(SUM(b.amount_required), 0) > 0
-            ORDER BY (COALESCE(SUM(b.amount_required), 0) - COALESCE(SUM(pa.amount_paid), 0)) DESC
+            LEFT JOIN (
+                SELECT v.patient_id, SUM(b.amount_required) AS total_required
+                FROM visits v JOIN bills b ON v.visit_id = b.visit_id
+                GROUP BY v.patient_id
+            ) bt ON bt.patient_id = p.patient_id
+            LEFT JOIN (
+                SELECT v.patient_id, SUM(pay.amount_paid) AS total_paid
+                FROM visits v
+                JOIN bills b ON v.visit_id = b.visit_id
+                JOIN payments pay ON pay.bill_id = b.bill_id
+                GROUP BY v.patient_id
+            ) pt ON pt.patient_id = p.patient_id
+            WHERE COALESCE(bt.total_required, 0) > 0
+            ORDER BY balance DESC
         """)
         for r in rows:
             self.balances_tree.insert("", "end", values=(r[0], f"${r[1]:.2f}", f"${r[2]:.2f}",
                                                          f"${r[3]:.2f}", r[4] or "None"))
-            
+
     def refresh_visits(self):
         for item in self.visits_tree.get_children():
             self.visits_tree.delete(item)
@@ -617,16 +1038,6 @@ class ClinicApp:
             f"{p[0]} - {p[1]}" for p in patients
         ]
 
-        doctors = self.db.fetchall("""
-            SELECT doctor_id, full_name
-            FROM doctors
-            ORDER BY full_name
-        """)
-
-        self.pat_doctor["values"] = [
-            f"{d[0]} - {d[1]}" for d in doctors
-        ]
-
     def delete_doctor(self):
         selected = self.doctors_tree.selection()
 
@@ -662,19 +1073,14 @@ class ClinicApp:
         self.refresh_all_data()
         messagebox.showinfo("Success", "Doctor deleted successfully.")
 
-
-    def delete_patient(self):
-        selected = self.patients_tree.selection()
-
-        if not selected:
-            messagebox.showwarning("No Selection", "Please select a patient.")
+    def delete_current_patient(self):
+        if self.current_patient_id is None:
             return
-
-        patient_id = self.patients_tree.item(selected[0])["values"][0]
+        patient_id = self.current_patient_id
 
         if not messagebox.askyesno(
             "Confirm Delete",
-            "Delete this patient and all associated visits, bills, and payments?"
+            "Delete this patient and all associated visits, bills, payments, and files?"
         ):
             return
 
@@ -702,6 +1108,19 @@ class ClinicApp:
                 (visit_id,)
             )
 
+        files = self.db.fetchall(
+            "SELECT file_id, file_path FROM patient_files WHERE patient_id = ?",
+            (patient_id,)
+        )
+        for file_id, file_path in files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception:
+                pass
+        self.db.execute(
+            "DELETE FROM patient_files WHERE patient_id = ?", (patient_id,))
+
         self.db.execute(
             "DELETE FROM visits WHERE patient_id = ?",
             (patient_id,)
@@ -712,9 +1131,10 @@ class ClinicApp:
             (patient_id,)
         )
 
+        self.current_patient_id = None
+        self.show_screen("patients")
         self.refresh_all_data()
         messagebox.showinfo("Success", "Patient deleted successfully.")
-
 
     def delete_visit(self):
         selected = self.visits_tree.selection()
@@ -747,6 +1167,17 @@ class ClinicApp:
             (visit_id,)
         )
 
+        files = self.db.fetchall(
+            "SELECT file_id, file_path FROM patient_files WHERE visit_id = ?", (visit_id,))
+        for file_id, file_path in files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception:
+                pass
+        self.db.execute(
+            "DELETE FROM patient_files WHERE visit_id = ?", (visit_id,))
+
         self.db.execute(
             "DELETE FROM visits WHERE visit_id = ?",
             (visit_id,)
@@ -754,7 +1185,6 @@ class ClinicApp:
 
         self.refresh_all_data()
         messagebox.showinfo("Success", "Visit deleted successfully.")
-
 
     def delete_payment(self):
         selected = self.payments_tree.selection()
@@ -778,7 +1208,6 @@ class ClinicApp:
 
         self.refresh_all_data()
         messagebox.showinfo("Success", "Payment deleted successfully.")
-
 
     def export_balances(self):
         filename = filedialog.asksaveasfilename(
@@ -809,8 +1238,6 @@ class ClinicApp:
             "Balances exported successfully."
         )
 
-
-            
 
 if __name__ == "__main__":
     root = tk.Tk()
